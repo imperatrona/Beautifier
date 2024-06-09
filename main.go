@@ -3,17 +3,22 @@ package main
 import (
 	"log"
 	"net/http"
-	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/imperatrona/beautifier/app"
+	"github.com/imperatrona/beautifier/handlers"
 	"github.com/joho/godotenv"
 	"gitlab.com/toby3d/telegraph"
-	"golang.org/x/net/proxy"
+
+	"gopkg.in/telebot.v3"
 )
 
 func main() {
 
+	// parse env
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
@@ -25,6 +30,8 @@ func main() {
 	if telegraphToken == "" || telegramToken == "" {
 		log.Fatal("Required env variables was not provided")
 	}
+
+	// init app
 
 	transport, err := parseProxy(os.Getenv("PROXY"))
 	if err != nil {
@@ -48,51 +55,33 @@ func main() {
 		},
 	)
 
-	url := "https://medium.com/@julienetienne/stop-using-localstorage-64a6d6805da8"
+	// start bot
 
-	document, err := app.Fetch(url)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer document.Close()
-
-	article, err := app.Parse(document, url)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	posts, err := app.Publish(article)
+	bot, err := telebot.NewBot(telebot.Settings{
+		Token:  telegramToken,
+		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println(posts)
-}
+	bot.Handle("/start", handlers.StartCommandHandler)
+	bot.Handle("/help", handlers.HelpCommandHandler)
 
-func parseProxy(proxyUri string) (*http.Transport, error) {
-	var transport *http.Transport
+	bot.Handle(telebot.OnText, handlers.TextHandler(app))
 
-	if proxyUri != "" {
-		proxyUrl, err := url.Parse(proxyUri)
-		if err != nil {
-			return nil, err
-		}
+	go func() {
+		bot.Start()
+	}()
 
-		password, _ := proxyUrl.User.Password()
+	log.Println("Server started...")
 
-		p, err := proxy.SOCKS5("tcp", proxyUrl.Host, &proxy.Auth{
-			User:     proxyUrl.User.Username(),
-			Password: password,
-		}, proxy.Direct)
+	// catch exit
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-		if err != nil {
-			return nil, err
-		}
+	bot.Stop()
+	log.Println("Server stopped...")
 
-		transport = &http.Transport{
-			Dial: p.Dial,
-		}
-	}
-
-	return transport, nil
 }

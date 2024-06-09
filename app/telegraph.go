@@ -4,18 +4,25 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"net/url"
 	"strings"
 
 	"github.com/cixtor/readability"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 	"gitlab.com/toby3d/telegraph"
 	"golang.org/x/net/html"
 )
 
-func (a *App) Publish(article *readability.Article) ([]*telegraph.Page, error) {
+func (a *App) Publish(article *readability.Article, source url.URL) ([]*telegraph.Page, error) {
 	var buf bytes.Buffer
 	html.Render(&buf, article.Node)
 
-	max := 60000
+	id, err := gonanoid.Generate("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", 5)
+	if err != nil {
+		return nil, err
+	}
+
+	max := 20000
 	text := buf.String()
 	var chunks []string
 
@@ -49,7 +56,7 @@ func (a *App) Publish(article *readability.Article) ([]*telegraph.Page, error) {
 		}
 
 		page, err := a.api.CreatePage(telegraph.Page{
-			Title:       article.Title,
+			Title:       id,
 			Description: article.Excerpt,
 			ImageURL:    article.Image,
 			Content:     content,
@@ -57,11 +64,16 @@ func (a *App) Publish(article *readability.Article) ([]*telegraph.Page, error) {
 			AuthorURL:   a.author.URL,
 		}, false)
 
+		if err != nil {
+			return nil, err
+		}
+
 		pages = append(pages, page)
 		fmt.Println(i+1, page.URL)
 	}
 
 	// add pagination, and meta links
+	var resultPages []*telegraph.Page
 	for i, page := range pages {
 		nextPage := true
 		if i+1 == len(pages) {
@@ -71,36 +83,43 @@ func (a *App) Publish(article *readability.Article) ([]*telegraph.Page, error) {
 		var chunk string
 
 		if i > 0 {
-			chunk += fmt.Sprintf(`<a href="%s">Previous page</a><hr />`, pages[i-1].URL)
+			chunk += fmt.Sprintf(`<p><a href="%s">« Previous page</a></p>`, pages[i-1].URL)
 		}
 
 		chunk += chunks[i]
 
+		if i+1 == len(pages) {
+			chunk += fmt.Sprintf(`<p><i>Originally published at <a href="%s">%s</a></i></p>`, source.String(), source.Host)
+		}
 		if nextPage || i > 0 {
 			if nextPage {
-				chunk += fmt.Sprintf(`<hr /><a href="%s">Next page</a>`, pages[i+1].URL)
+				chunk += fmt.Sprintf(`<p><a href="%s">Next page »</a></p>`, pages[i+1].URL)
 			}
+		}
 
-			content, err := telegraph.ContentFormat(chunk)
-			if err != nil {
-				return nil, err
-			}
+		content, err := telegraph.ContentFormat(chunk)
+		if err != nil {
+			return nil, err
+		}
 
-			_, err = a.api.EditPage(telegraph.Page{
-				Title:       article.Title,
-				Description: article.Excerpt,
-				ImageURL:    article.Image,
-				Content:     content,
-				Path:        page.Path,
-				AuthorName:  a.author.Name,
-				AuthorURL:   a.author.URL,
-			}, false)
+		newPage, err := a.api.EditPage(telegraph.Page{
+			Title:       article.Title,
+			Description: article.Excerpt,
+			ImageURL:    article.Image,
+			Content:     content,
+			Path:        page.Path,
+			AuthorName:  a.author.Name,
+			AuthorURL:   a.author.URL,
+		}, false)
 
-			if err != nil {
-				return nil, err
-			}
+		if pages[i] != nil {
+			resultPages = append(resultPages, newPage)
+		}
+
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	return pages, nil
+	return resultPages, nil
 }
